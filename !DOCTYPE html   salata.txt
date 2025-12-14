@@ -1,0 +1,381 @@
+!DOCTYPE html>
+<html lang="ru" xmlns:th="http://www.thymeleaf.org">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Симуляция бильярда</title>
+    <link rel="stylesheet" href="/css/simulation.css">
+    <script src="/js/game.js" defer></script>
+</head>
+
+<body>
+   
+    <header>
+        <div class="nav-container">
+            <a href="/" class="logo">
+                🎱 <span class="logo-text">Бильярд Симулятор</span>
+            </a>
+            <nav>
+                <a th:href="@{/}">🏠 Главная</a>
+                <a th:href="@{/theory}">📚 Теория</a>
+                <a th:href="@{/simulation}" class="active">🎮 Симуляция</a>
+                <a th:href="@{/profile}">👤 Профиль</a>
+                <a th:href="@{/results}">📊 Результаты</a>
+               
+                <form th:action="@{/logout}" method="post" class="logout-form">
+                    <button type="submit" class="logout-btn">
+                        🚪 Выход
+                    </button>
+                </form>
+            </nav>
+        </div>
+    </header>
+
+    <!-- Основной контент -->
+    <main class="wrap">
+        <!-- Левая панель - управление -->
+        <div id="controls">
+            <form id="gameParamsForm">
+                <h2>⚙️ Настройки игры</h2>
+
+                <div class="setting">
+                    <label>🎱 Диаметр шара (мм):</label>
+                    <input type="number" id="ballDiameter" value="57.15" step="0.01" min="10" max="100" />
+                </div>
+
+                <div class="setting">
+                    <label>🔧 Материал шара:</label>
+                    <select id="ballMaterialType">
+                        <option value="phenolic" selected>Фенол</option>
+                        <option value="plastic">Пластик</option>
+                        <option value="steel">Сталь</option>
+                        <option value="wood">Дерево</option>
+                        <option value="glass">Стекло</option>
+                    </select>
+                </div>
+
+                <div class="setting">
+                    <label>🟩 Тип фетра стола:</label>
+                    <select id="tableMaterial">
+                        <option value="tournament" selected>Турнирный</option>
+                        <option value="professional">Профессиональный</option>
+                        <option value="amateur">Любительский</option>
+                        <option value="slow">Медленный</option>
+                        <option value="fast">Быстрый</option>
+                    </select>
+                </div>
+
+                <button type="button" id="saveParamsBtn">💾 Сохранить параметры</button>
+            </form>
+
+            <div id="buttons">
+                <button id="fullResetBtn">🔄 Полный сброс</button>
+                <button id="rackBtn">🎱 Переставить пирамиду</button>
+                <button id="toggleTraj">📈 Траектория: Вкл</button>
+                <button id="saveSimulationBtn">💾 Сохранить симуляцию</button>
+               
+            </div>
+
+            <div class="section">
+                <h3>🎯 Шары в лузах</h3>
+                <div id="pocketedList" class="pocketed-balls">
+                    <span style="color: #666; font-style: italic;">—</span>
+                </div>
+            </div>
+
+            <div class="section">
+                <h3>🔍 Фильтр по шарам</h3>
+                <label for="ballFilter">Выберите шар для отчета:</label>
+                <select id="ballFilter">
+                    <option value="all" selected>Все шары</option>
+                    <!-- Номера шаров будут добавлены JS -->
+                </select>
+            </div>
+
+            <div class="section">
+                <h3>💥 Столкновения</h3>
+                <div class="table-container">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Шар 1</th>
+                                <th>Шар 2</th>
+                                <th>V₁ до</th>
+                                <th>V₂ до</th>
+                                <th>V₁ после</th>
+                                <th>V₂ после</th>
+                                <th>Энергия</th>
+                                <th>Импульс до</th>
+                                <th>Импульс после</th>
+                                <th>КПД</th>
+
+
+
+                            </tr>
+                        </thead>
+                        <tbody id="collisionsBody">
+                            <tr>
+                                <td colspan="7" style="text-align: center; color: #999; padding: 20px;">
+                                    Столкновения ещё не зафиксированы
+                                </td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <!-- Правая часть - стол -->
+        <div class="table-wrapper table-shadow">
+            <div class="canvas-texture">
+                <!-- Лузы -->
+                <div class="table-pockets"></div>
+                <!-- Разметка -->
+                <div class="table-markings"></div>
+                <!-- Блик -->
+                <div class="table-highlight"></div>
+                <!-- Canvas с игрой -->
+                <canvas id="table" width="960" height="540"></canvas>
+            </div>
+        </div>
+    </main>
+
+    <footer>
+        <p>© Бильярд Симулятор 2025 | Демонстрационный проект</p>
+    </footer>
+
+    <!-- CSRF токен для форм -->
+    <script th:inline="javascript">
+        /*<![CDATA[*/
+        document.addEventListener('DOMContentLoaded', function() {
+            const logoutForms = document.querySelectorAll('form[action*="logout"]');
+            const csrfToken = /*[[${_csrf?.token}]]*/ null;
+            const csrfParam = /*[[${_csrf?.parameterName}]]*/ '_csrf';
+            
+            if (csrfToken && csrfParam) {
+                logoutForms.forEach(form => {
+                    const csrfInput = document.createElement('input');
+                    csrfInput.type = 'hidden';
+                    csrfInput.name = csrfParam;
+                    csrfInput.value = csrfToken;
+                    form.appendChild(csrfInput);
+                });
+            }
+            
+            // JavaScript для кнопки тестирования
+            document.getElementById('testSaveBtn')?.addEventListener('click', async () => {
+                console.log('Тестовое сохранение...');
+                
+                const testData = {
+                    name: 'Тестовая симуляция',
+                    ballCount: 16,
+                    duration: '120.50',
+                    ballsJson: JSON.stringify([
+                        { number: 0, inPocket: false, x: 100, y: 100 },
+                        { number: 1, inPocket: true, x: 200, y: 200 }
+                    ]),
+                    collisionsJson: JSON.stringify([
+                        { ball1: 0, ball2: 1, speed1Before: '5.0', speed2Before: '0.0' }
+                    ]),
+                    parametersJson: JSON.stringify({ test: 'data' })
+                };
+                
+                try {
+                    const response = await fetch('/simulation/save', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'X-CSRF-TOKEN': document.querySelector('meta[name="_csrf"]')?.content || ''
+                        },
+                        body: JSON.stringify(testData)
+                    });
+                    
+                    const result = await response.json();
+                    console.log('Результат теста:', result);
+                    alert(`Тест: ${result.success ? 'Успешно' : 'Ошибка'}\n${result.message}`);
+                } catch (error) {
+                    console.error('Ошибка теста:', error);
+                    alert('Ошибка теста: ' + error.message);
+                }
+            });
+        });
+        /*]]>*/
+    </script>
+    <script src="billiard-.js"></script>
+</body>
+</html>
+
+
+
+
+
+
+
+
+
+
+
+
+document.addEventListener("DOMContentLoaded", () => {
+    const MAX_SPEED = 6; // ограничение скорости м/с
+    const collisionsBody = document.getElementById("collisionsBody");
+
+    // Параметры от пользователя
+    let ballDiameter = parseFloat(document.getElementById("ballDiameter").value);
+    let ballMaterial = document.getElementById("ballMaterialType").value;
+    let tableMaterial = document.getElementById("tableMaterial").value;
+
+    // Материалы: коэффициент упругости (e) и массы (kg)
+    const ballMaterials = {
+        phenolic: { mass: 0.17, e: 0.9 },
+        plastic: { mass: 0.15, e: 0.85 },
+        steel: { mass: 0.2, e: 0.95 },
+        wood: { mass: 0.12, e: 0.8 },
+        glass: { mass: 0.18, e: 0.88 },
+    };
+
+    // Стол: коэффициент трения
+    const tableFriction = {
+        tournament: 0.02,
+        professional: 0.03,
+        amateur: 0.05,
+        slow: 0.08,
+        fast: 0.01,
+    };
+
+    let balls = []; // массив шаров с их позициями и скоростями
+    let collisions = [];
+
+    function initBalls() {
+        balls = [];
+        for (let i = 0; i < 16; i++) {
+            balls.push({
+                number: i,
+                x: Math.random() * 900 + 30,
+                y: Math.random() * 500 + 20,
+                vx: Math.random() * MAX_SPEED,
+                vy: Math.random() * MAX_SPEED,
+                radius: ballDiameter / 2,
+                mass: ballMaterials[ballMaterial].mass
+            });
+        }
+    }
+
+    function simulateCollisions() {
+        collisions = [];
+        for (let i = 0; i < balls.length; i++) {
+            for (let j = i + 1; j < balls.length; j++) {
+                let b1 = balls[i];
+                let b2 = balls[j];
+
+                // Вектор расстояния
+                let dx = b2.x - b1.x;
+                let dy = b2.y - b1.y;
+                let dist = Math.sqrt(dx * dx + dy * dy);
+
+                if (dist <= b1.radius + b2.radius) {
+                    // Скорости до столкновения
+                    let v1Before = Math.sqrt(b1.vx ** 2 + b1.vy ** 2);
+                    let v2Before = Math.sqrt(b2.vx ** 2 + b2.vy ** 2);
+
+                    // Нормаль
+                    let nx = dx / dist;
+                    let ny = dy / dist;
+
+                    // Относительная скорость по нормали
+                    let dvx = b1.vx - b2.vx;
+                    let dvy = b1.vy - b2.vy;
+                    let vn = dvx * nx + dvy * ny;
+
+                    if (vn > 0) continue; // шар уже расходится
+
+                    // Коэффициент упругости
+                    let e = Math.min(ballMaterials[ballMaterial].e, ballMaterials[ballMaterial].e);
+
+                    // Импульс
+                    let jImpulse = -(1 + e) * vn / (1 / b1.mass + 1 / b2.mass);
+
+                    b1.vx += (jImpulse / b1.mass) * nx;
+                    b1.vy += (jImpulse / b1.mass) * ny;
+                    b2.vx -= (jImpulse / b2.mass) * nx;
+                    b2.vy -= (jImpulse / b2.mass) * ny;
+
+                    // Ограничение скорости
+                    let v1After = Math.min(Math.sqrt(b1.vx ** 2 + b1.vy ** 2), MAX_SPEED);
+                    let v2After = Math.min(Math.sqrt(b2.vx ** 2 + b2.vy ** 2), MAX_SPEED);
+                    b1.vx = b1.vx * v1After / Math.sqrt(b1.vx ** 2 + b1.vy ** 2);
+                    b1.vy = b1.vy * v1After / Math.sqrt(b1.vx ** 2 + b1.vy ** 2);
+                    b2.vx = b2.vx * v2After / Math.sqrt(b2.vx ** 2 + b2.vy ** 2);
+                    b2.vy = b2.vy * v2After / Math.sqrt(b2.vx ** 2 + b2.vy ** 2);
+
+                    // Энергия
+                    let energyBefore = 0.5 * b1.mass * v1Before ** 2 + 0.5 * b2.mass * v2Before ** 2;
+                    let energyAfter = 0.5 * b1.mass * v1After ** 2 + 0.5 * b2.mass * v2After ** 2;
+
+                    // Импульс
+                    let momentumBefore = b1.mass * v1Before + b2.mass * v2Before;
+                    let momentumAfter = b1.mass * v1After + b2.mass * v2After;
+
+                    // КПД
+                    let efficiency = (energyAfter / energyBefore) * 100;
+
+                    collisions.push({
+                        ball1: b1.number,
+                        ball2: b2.number,
+                        v1Before: v1Before.toFixed(2),
+                        v2Before: v2Before.toFixed(2),
+                        v1After: v1After.toFixed(2),
+                        v2After: v2After.toFixed(2),
+                        energy: energyAfter.toFixed(2),
+                        momentumBefore: momentumBefore.toFixed(2),
+                        momentumAfter: momentumAfter.toFixed(2),
+                        efficiency: efficiency.toFixed(2)
+                    });
+                }
+            }
+        }
+        updateTable();
+    }
+
+    function updateTable() {
+        collisionsBody.innerHTML = "";
+        if (collisions.length === 0) {
+            collisionsBody.innerHTML = `<tr><td colspan="10" style="text-align:center;color:#999;padding:20px;">Столкновения ещё не зафиксированы</td></tr>`;
+        } else {
+            collisions.forEach(c => {
+                let row = `<tr>
+                    <td>${c.ball1}</td>
+                    <td>${c.ball2}</td>
+                    <td>${c.v1Before}</td>
+                    <td>${c.v2Before}</td>
+                    <td>${c.v1After}</td>
+                    <td>${c.v2After}</td>
+                    <td>${c.energy}</td>
+                    <td>${c.momentumBefore}</td>
+                    <td>${c.momentumAfter}</td>
+                    <td>${c.efficiency}</td>
+                </tr>`;
+                collisionsBody.innerHTML += row;
+            });
+        }
+    }
+
+    document.getElementById("saveParamsBtn").addEventListener("click", () => {
+        ballDiameter = parseFloat(document.getElementById("ballDiameter").value);
+        ballMaterial = document.getElementById("ballMaterialType").value;
+        tableMaterial = document.getElementById("tableMaterial").value;
+        initBalls();
+        simulateCollisions();
+    });
+
+    // Инициализация
+    initBalls();
+    simulateCollisions();
+});
+
+
+
+
+
+
+
