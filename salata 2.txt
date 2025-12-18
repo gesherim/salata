@@ -1,0 +1,672 @@
+document.addEventListener('DOMContentLoaded', () => {
+  const canvas = document.getElementById('table');
+  const ctx = canvas.getContext('2d');
+  const W = canvas.width, H = canvas.height;
+
+ 
+  const materialDensity = { 
+    phenolic: 1400, plastic: 1200, steel: 7850, wood: 700, glass: 2500 
+  };
+  
+  const materialRestitution = { 
+    phenolic: 0.92, plastic: 0.75, steel: 0.98, wood: 0.85, glass: 0.90 
+  };
+  
+  const tableFrictionMap = { 
+    tournament: 0.985, professional: 0.98, amateur: 0.97, slow: 0.95, fast: 0.99 
+  };
+
+  let globalParams = {
+    ballDiameter_mm: 57.15,
+    material: 'phenolic',
+    tableFriction: 0.985,
+    mass: 0.17
+  };
+
+  function updatePhysicalParameters() {
+    const diameter_mm = parseFloat(document.getElementById('ballDiameter')?.value)  57.15;
+    const material = document.getElementById('ballMaterialType')?.value  'phenolic';
+    const frictionType = document.getElementById('tableMaterial')?.value  'tournament';
+    
+    const diameter_m = diameter_mm / 1000;
+    const radius_m = diameter_m / 2;
+    const volume = (4/3) * Math.PI * Math.pow(radius_m, 3);
+    const density = materialDensity[material]  1400;
+    const mass = volume * density;
+    
+    globalParams.ballDiameter_mm = diameter_mm;
+    globalParams.material = material;
+    globalParams.restitution = materialRestitution[material]  0.92;
+    globalParams.tableFriction = tableFrictionMap[frictionType]  0.985;
+    globalParams.mass = mass;
+    globalParams.density = density;
+  }
+
+  updatePhysicalParameters();
+
+  let balls = [], cueBall = null, collisions = [], showTrajectory = true;
+  let ballRadius = Math.max(12, Math.round(globalParams.ballDiameter_mm / 2));
+  const MIN_SPEED = 0.05;
+  const PIXELS_PER_METER = 45;
+  const MAX_SPEED = 5;
+  const DT = 1/60;
+
+
+  const ballColors = [
+    "#ffffff", "#ffff00", "#0000ff", "#ff0000", "#800080", 
+    "#ff8c00", "#008000", "#8b0000", "#000000", "#ffff00",
+    "#0000ff", "#ff0000", "#800080", "#ff8c00", "#008000", "#8b0000"
+  ];
+
+  const rails = { padding: 45 };
+  const tableRect = { 
+    x: rails.padding, 
+    y: rails.padding, 
+    w: W - rails.padding*2, 
+    h: H - rails.padding*2 
+  };
+  
+  const pockets = [
+    {x:tableRect.x, y:tableRect.y},
+    {x:tableRect.x + tableRect.w/2, y:tableRect.y},
+    {x:tableRect.x + tableRect.w, y:tableRect.y},
+    {x:tableRect.x, y:tableRect.y + tableRect.h},
+    {x:tableRect.x + tableRect.w/2, y:tableRect.y + tableRect.h},
+    {x:tableRect.x + tableRect.w, y:tableRect.y + tableRect.h}
+  ]; class Ball {
+    constructor(x, y, num){
+      this.x = x; this.y = y; this.vx = 0; this.vy = 0;
+      this.number = num; this.inPocket = false; 
+      this.mass = globalParams.mass;
+      this.restitution = globalParams.restitution;
+      this.radius = ballRadius;
+      this.active = true;
+    }
+    
+    speed() { 
+      return Math.hypot(this.vx, this.vy); 
+    }
+    
+    applyFriction() { 
+      if (this.inPocket) return;
+      this.vx *= globalParams.tableFriction; 
+      this.vy *= globalParams.tableFriction;
+      if(Math.abs(this.vx) < MIN_SPEED) this.vx = 0; 
+      if(Math.abs(this.vy) < MIN_SPEED) this.vy = 0; 
+    }
+    
+    update(dt){
+      if(this.inPocket  !this.active) return;
+      this.x += this.vx * dt * PIXELS_PER_METER;
+      this.y += this.vy * dt * PIXELS_PER_METER;
+      this.applyFriction();
+      this.checkRails();
+    }
+    
+    checkRails(){
+      const left = tableRect.x + this.radius;
+      const right = tableRect.x + tableRect.w - this.radius;
+      const top = tableRect.y + this.radius;
+      const bottom = tableRect.y + tableRect.h - this.radius;
+      
+      let bounced = false;
+      if(this.x < left){ this.x = left; this.vx = Math.abs(this.vx)*0.9; bounced = true; }
+      if(this.x > right){ this.x = right; this.vx = -Math.abs(this.vx)*0.9; bounced = true; }
+      if(this.y < top){ this.y = top; this.vy = Math.abs(this.vy)*0.9; bounced = true; }
+      if(this.y > bottom){ this.y = bottom; this.vy = -Math.abs(this.vy)*0.9; bounced = true; }
+      
+      if(bounced) {
+        recordCollision(null, this, 'rail');
+      }
+    }
+    
+    
+    draw(){
+      if(this.inPocket) return;
+      
+     
+      ctx.beginPath();
+      ctx.arc(this.x, this.y, this.radius, 0, Math.PI*2);
+      ctx.fillStyle = ballColors[this.number]  '#999';
+      ctx.fill();
+      ctx.lineWidth = 2;
+      ctx.strokeStyle = '#000';
+      ctx.stroke();
+      
+      
+      if(this.number !== 0){
+        ctx.fillStyle = (this.number === 8 ? '#fff' : '#000');
+        ctx.font = ${Math.max(14, this.radius*0.7)}px Arial;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(this.number, this.x, this.y);
+      }
+    }
+  } // --- ФУНКЦИИ ДЛЯ СТОЛКНОВЕНИЙ И ТАБЛИЦЫ ---
+  function resolveCollision(a,b){
+    if(a.inPocket  b.inPocket  !a.active  !b.active) return false;
+    
+    const dx = b.x - a.x, dy = b.y - a.y;
+    const dist = Math.hypot(dx, dy);
+    const minDist = a.radius + b.radius;
+    
+    if(dist >= minDist) return false;
+    
+    // Запоминаем скорости до столкновения
+    const speedA_before = a.speed();
+    const speedB_before = b.speed();
+    
+    const nx = dx/dist, ny = dy/dist;
+    const overlap = (minDist - dist)/2;
+    a.x -= nx*overlap; a.y -= ny*overlap;
+    b.x += nx*overlap; b.y += ny*overlap;
+
+    const dvx = b.vx - a.vx, dvy = b.vy - a.vy;
+    const velAlongNormal = dvx*nx + dvy*ny;
+    if(velAlongNormal > 0) return false;
+
+    const e = Math.min(a.restitution, b.restitution);
+    const j = -(1 + e) * velAlongNormal;
+    const impulse = j / (1/a.mass + 1/b.mass);
+    
+    a.vx -= (impulse / a.mass) * nx;
+    a.vy -= (impulse / a.mass) * ny;
+    b.vx += (impulse / b.mass) * nx;
+    b.vy += (impulse / b.mass) * ny;
+    
+    // Скорости после столкновения
+    const speedA_after = a.speed();
+    const speedB_after = b.speed();
+    
+    // Расчет переданной энергии
+    const energyBefore = 0.5 * a.mass * Math.pow(speedA_before, 2) +
+                        0.5 * b.mass * Math.pow(speedB_before, 2);
+    const energyAfter = 0.5 * a.mass * Math.pow(speedA_after, 2) +
+                       0.5 * b.mass * Math.pow(speedB_after, 2);
+    const energyTransferred = Math.abs(energyAfter - energyBefore);
+    
+    // Записываем столкновение
+    const collision = {
+      type: 'ball',
+      ball1: a.number,
+      ball2: b.number,
+      speed1Before: speedA_before.toFixed(3),
+      speed2Before: speedB_before.toFixed(3),
+      speed1After: speedA_after.toFixed(3),
+      speed2After: speedB_after.toFixed(3),
+      energyTransferred: energyTransferred.toFixed(5),
+      timestamp: Date.now()
+    };
+    
+    collisions.push(collision);
+    updateCollisionsTable(collision);
+    
+    return true;
+  }
+
+  function recordCollision(a, b, type) {
+    if(type === 'rail' && b) {
+      const collision = {
+        type: 'rail',
+        ball1: null,
+        ball2: b.number,
+        speed1Before: null,
+        speed2Before: b.speed().toFixed(3),
+        speed1After: null,
+        speed2After: (b.speed() * 0.9).toFixed(3),
+        energyTransferred: '0.00000',
+        timestamp: Date.now()
+      };
+      collisions.push(collision);
+      updateCollisionsTable(collision);
+    }
+  }
+
+  // --- ОСНОВНАЯ ФУНКЦИЯ ДЛЯ ЗАПОЛНЕНИЯ ТАБЛИЦЫ ---
+  function updateCollisionsTable(collision) {
+    const tableBody = document.getElementById('collisionsBody');
+    if (!tableBody) return;
+    
+    // Убираем сообщение "нет столкновений" при первом добавлении
+    if (tableBody.children.length === 1 && 
+        tableBody.children[0].textContent.includes('Столкновения')) {
+      tableBody.innerHTML = '';
+    }
+    
+    // Создаем новую строку
+    const row = document.createElement('tr');
+    
+    if (collision.type === 'ball') {
+      row.innerHTML = `
+        <td style="text-align: center;">${collision.ball1}</td>
+        <td style="text-align: center;">${collision.ball2}</td>
+        <td style="text-align: center;">${collision.speed1Before}</td>
+        <td style="text-align: center;">${collision.speed2Before}</td>
+        <td style="text-align: center;">${collision.speed1After}</td>
+        <td style="text-align: center;">${collision.speed2After}</td>
+        <td style="text-align: center;">${collision.energyTransferred}</td>
+      `;
+    } else if (collision.type === 'rail') {
+      row.innerHTML = `
+        <td style="text-align: center; color: #666;">—</td>
+        <td style="text-align: center;">${collision.ball2}</td>
+        <td style="text-align: center; color: #666;">—</td>
+        <td style="text-align: center;">${collision.speed2Before}</td>
+        <td style="text-align: center; color: #666;">—</td>
+        <td style="text-align: center;">${collision.speed2After}</td>
+        <td style="text-align: center;">${collision.energyTransferred}</td>
+      `;
+    } // Добавляем строку в начало таблицы
+    tableBody.insertBefore(row, tableBody.firstChild);
+    
+    // Ограничиваем количество строк в таблице 
+    if (tableBody.children.length > 15) {
+      tableBody.removeChild(tableBody.lastChild);
+    }
+  }
+
+  // Функция для обновления списка шаров в лузах
+  function updatePocketedList() {
+    const pocketedList = document.getElementById('pocketedList');
+    if (!pocketedList) return;
+    
+    const pocketedBalls = balls.filter(b => b.inPocket && b.number !== 0);
+    
+    if (pocketedBalls.length === 0) {
+      pocketedList.innerHTML = '<span style="color: #666; font-style: italic;">—</span>';
+    } else {
+      pocketedList.innerHTML = pocketedBalls
+        .sort((a, b) => a.number - b.number)
+        .map(b => `<span class="ball-number" style="
+          display: inline-block;
+          width: 24px;
+          height: 24px;
+          line-height: 24px;
+          border-radius: 50%;
+          text-align: center;
+          background: ${ballColors[b.number]};
+          color: ${b.number === 8 ? '#fff' : '#000'};
+          font-weight: bold;
+          margin: 2px;
+          box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+        ">${b.number}</span>`)
+        .join('');
+    }
+  }
+
+  // Функция для заполнения фильтра по шарам
+  function updateBallFilter() {
+    const ballFilter = document.getElementById('ballFilter');
+    if (!ballFilter) return;
+    
+    // Сохраняем текущее значение
+    const currentValue = ballFilter.value;
+    
+    // Очищаем опции (кроме "Все шары")
+    while (ballFilter.options.length > 1) {
+      ballFilter.remove(1);
+    }
+    
+    // Добавляем опции для всех шаров
+    balls.filter(b => b.number !== 0 && !b.inPocket)
+      .sort((a, b) => a.number - b.number)
+      .forEach(ball => {
+        const option = document.createElement('option');
+        option.value = ball.number;
+        option.textContent = Шар ${ball.number};
+        ballFilter.appendChild(option);
+      });
+    
+    // Восстанавливаем выбранное значение, если оно еще существует
+    if (currentValue && ballFilter.querySelector(option[value="${currentValue}"])) {
+      ballFilter.value = currentValue;
+    }
+  }
+
+  function checkPocket(ball){
+    if(ball.number === 0  ball.inPocket) return;
+    
+    for(const p of pockets){
+      if(Math.hypot(ball.x - p.x, ball.y - p.y) < ball.radius*1.8 && !ball.inPocket){
+        ball.inPocket = true;
+        ball.vx = 0; ball.vy = 0; ball.active = false;
+        
+        // Обновляем списки
+        updatePocketedList();
+        updateBallFilter();
+        break;
+      }
+    }
+  }
+
+  function initBalls(){
+  balls = []; 
+  collisions = [];
+  
+  // Пересчитываем радиус
+  ballRadius = Math.max(12, Math.round(globalParams.ballDiameter_mm / 2));
+  
+  cueBall = new Ball(tableRect.x + tableRect.w*0.25, tableRect.y + tableRect.h/2, 0);
+  balls.push(cueBall);
+
+  // Шары в пирамиде
+  let numbers = [];
+  for(let i=1; i<=15; i++) if(i !== 😎 numbers.push(i);
+  numbers.sort(() => Math.random() - 0.5);
+  numbers.splice(7, 0, 8); // Черный шар в центре пирамиды (правильное положение) const startX = tableRect.x + tableRect.w*0.65;
+  const startY = tableRect.y + tableRect.h/2;
+  const spacing = ballRadius * 2.05; // Немного уменьшаем отступ для лучшей визуализации
+  
+  let idx = 0;
+  let rowOffset = 0;
+  
+  // Пирамида из 5 рядов
+  for(let row=0; row<5; row++){
+    // Количество шаров в текущем ряду
+    const ballsInRow = row + 1;
+    
+    // Позиционируем шары в ряду
+    for(let col=0; col<ballsInRow; col++){
+      if(idx >= numbers.length) break;
+      
+      // X позиция: горизонтальное смещение между шарами
+      const x = startX + row * (spacing * 0.8660254); // cos(30°) ≈ 0.8660254
+      
+      // Y позиция: центрируем ряд относительно середины стола
+      // Сначала вычисляем общую ширину ряда
+      const rowWidth = (ballsInRow - 1) * spacing;
+      // Начальная позиция ряда (левый край)
+      const rowStartY = startY - rowWidth/2;
+      // Позиция каждого шара
+      const y = rowStartY + col * spacing;
+      
+      balls.push(new Ball(x, y, numbers[idx++]));
+    }
+  }
+  
+  // Обновляем UI
+  updatePocketedList();
+  updateBallFilter();
+  
+  // Очищаем таблицу столкновений
+  const tableBody = document.getElementById('collisionsBody');
+  if (tableBody) {
+    tableBody.innerHTML = `
+      <tr>
+        <td colspan="7" style="text-align: center; color: #999; padding: 20px;">
+          Столкновения ещё не зафиксированы
+        </td>
+      </tr>
+    `;
+  }
+}
+  
+  initBalls();
+
+ 
+  let mouse = { x:0, y:0, down:false, start:null };
+  
+  canvas.addEventListener('mousedown', e => {
+    const r = canvas.getBoundingClientRect();
+    const clickX = (e.clientX - r.left)*(canvas.width/r.width);
+    const clickY = (e.clientY - r.top)*(canvas.height/r.height);
+    
+    if (cueBall && !cueBall.inPocket) {
+      const dist = Math.hypot(clickX - cueBall.x, clickY - cueBall.y);
+      if(dist < ballRadius*4){ 
+        mouse.down = true; 
+        mouse.start = {x: clickX, y: clickY}; 
+      }
+    }
+  });
+
+  window.addEventListener('mouseup', () => {
+    if(mouse.down && mouse.start && cueBall && !cueBall.inPocket){
+      let dx = (mouse.start.x - cueBall.x)/PIXELS_PER_METER;
+      let dy = (mouse.start.y - cueBall.y)/PIXELS_PER_METER;
+      
+      // Сила удара зависит от расстояния
+      const distance = Math.hypot(dx, dy);
+      const maxPull = 0.4;
+      const power = Math.min(distance / maxPull, 1.0);
+      
+      const HIT_FACTOR = 12 * power;
+      cueBall.vx += dx * HIT_FACTOR;
+      cueBall.vy += dy * HIT_FACTOR;
+      
+      let speed = Math.hypot(cueBall.vx, cueBall.vy);
+      if(speed > MAX_SPEED){
+        cueBall.vx = (cueBall.vx / speed) * MAX_SPEED;
+        cueBall.vy = (cueBall.vy / speed) * MAX_SPEED;
+      }
+    }
+    mouse.down = false; 
+    mouse.start = null;
+  });
+
+  canvas.addEventListener('mousemove', e => {
+    const r = canvas.getBoundingClientRect();
+    mouse.x = (e.clientX - r.left)*(canvas.width/r.width);
+    mouse.y = (e.clientY - r.top)*(canvas.height/r.height);
+  });
+
+  function drawTable(){
+    ctx.fillStyle='#4b2f1a'; 
+    ctx.fillRect(0,0,W,H);
+    
+    // Игровая поверхность
+    ctx.fillStyle='#0c5c2b';
+    ctx.fillRect(tableRect.x, tableRect.y, tableRect.w, tableRect.h);
+    
+    // Лузы
+    for(const p of pockets){
+      ctx.beginPath(); 
+      ctx.arc(p.x, p.y, ballRadius*1.8, 0, Math.PI*2);
+      ctx.fillStyle='#000'; 
+      ctx.fill();
+    }
+  } // --- ФУНКЦИЯ ДЛЯ СОХРАНЕНИЯ СИМУЛЯЦИИ НА СЕРВЕР ---
+ // В simulation.js добавьте/обновите эту функцию
+async function saveSimulationToServer() {
+    const simName = prompt("Введите название симуляции", "Моя игра")  "Без названия";
+    if (!simName) return;
+    
+    // Рассчитываем общую энергию системы
+    const totalEnergy = balls.reduce((sum, ball) => {
+        if (ball.inPocket  !ball.active) return sum;
+        return sum + 0.5 * ball.mass * Math.pow(ball.speed(), 2);
+    }, 0).toFixed(5);
+    
+    // Собираем параметры
+    const params = {
+        ballDiameter: globalParams.ballDiameter_mm,
+        ballMaterial: globalParams.material,
+        tableFriction: document.getElementById('tableMaterial').value,
+        ballMass: globalParams.mass,
+        ballDensity: globalParams.density,
+        restitution: globalParams.restitution
+    };
+    
+    // Собираем шары
+    const ballsData = balls.map(b => ({
+        number: b.number,
+        x: b.x, 
+        y: b.y,
+        vx: b.vx,
+        vy: b.vy,
+        inPocket: b.inPocket,
+        active: b.active,
+        mass: b.mass,
+        radius: b.radius
+    }));
+    
+    // Собираем столкновения
+    const collisionsData = collisions.map(c => ({
+        type: c.type,
+        ball1: c.ball1,
+        ball2: c.ball2,
+        speed1Before: c.speed1Before,
+        speed2Before: c.speed2Before,
+        speed1After: c.speed1After,
+        speed2After: c.speed2After,
+        energyTransferred: c.energyTransferred,
+        timestamp: c.timestamp
+    }));
+    
+    // Формируем данные для отправки
+    const simData = {
+        name: simName,
+        params: params,
+        collisions: collisionsData,
+        balls: ballsData,
+        duration: 60, // Обязательное поле
+        ballCount: balls.filter(b => !b.inPocket).length,
+        collisionCount: collisions.length,
+        totalEnergyLost: parseFloat(totalEnergy)
+    };
+    
+    console.log("Отправка данных на сервер:", simData);
+
+    try {
+        const response = await fetch('/simulation/save', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify(simData)
+        });
+        
+        console.log("Статус ответа:", response.status);
+        
+        if (!response.ok) {
+            let errorMessage = HTTP error! status: ${response.status};
+            try {
+                const errorData = await response.json();
+                errorMessage = errorData.message  errorMessage;
+            } catch (e) {
+                // Не удалось прочитать JSON ошибки
+            }
+            throw new Error(errorMessage);
+        }
+        
+        const result = await response.json();
+        console.log("Ответ сервера:", result);
+        
+        if (result.success) {
+            alert(✅ Симуляция сохранена!\nID: ${result.id});
+            // После сохранения переходим к результатам
+            window.location.href = /simulation/results?id=${result.id};
+        } else {
+            alert(❌ Ошибка: ${result.message  'Неизвестная ошибка'});
+        }
+    } catch (error) {
+        console.error('Ошибка при сохранении:', error);
+        alert(❌ Ошибка сети при сохранении: ${error.message}\n\nПроверьте консоль браузера для подробностей.);
+    }
+}
+  // --- ОСНОВНОЙ ИГРОВОЙ ЦИКЛ ---
+  function gameLoop() {
+    // Обновляем параметры
+    updatePhysicalParameters();
+    
+    // Обновляем радиус
+    const newBallRadius = Math.max(12, Math.round(globalParams.ballDiameter_mm / 2));
+    if (newBallRadius !== ballRadius) {
+      ballRadius = newBallRadius;
+      balls.forEach(ball => ball.radius = ballRadius);
+    }
+    
+    // Обновляем массу и упругость
+    balls.forEach(ball => {
+      ball.mass = globalParams.mass;
+      ball.restitution = globalParams.restitution;
+    });
+    
+    // Проверяем столкновения
+    for(let i=0; i<balls.length; i++){
+      for(let j=i+1; j<balls.length; j++) {
+        resolveCollision(balls[i], balls[j]);
+      }
+    }
+    
+    // Обновляем шары
+    for(const b of balls) b.update(DT);
+    
+    // Проверяем лузы for(const b of balls) if(!b.inPocket) checkPocket(b);
+    
+    // Отрисовываем
+    ctx.clearRect(0,0,W,H);
+    drawTable();
+    for(const b of balls) b.draw();
+    
+    // Отрисовываем траекторию
+    if(showTrajectory && mouse.down && mouse.start && cueBall && !cueBall.inPocket){
+      ctx.save();
+      ctx.strokeStyle='rgba(255,255,255,0.5)'; 
+      ctx.setLineDash([6,6]);
+      ctx.beginPath(); 
+      ctx.moveTo(cueBall.x, cueBall.y); 
+      ctx.lineTo(mouse.x, mouse.y); 
+      ctx.stroke();
+      ctx.setLineDash([]); 
+      ctx.restore();
+    }
+    
+    requestAnimationFrame(gameLoop);
+  }
+
+  // --- ИНИЦИАЛИЗАЦИЯ UI ---
+  function initUI() {
+    // Кнопка сохранения параметров
+    document.getElementById('saveParamsBtn')?.addEventListener('click', () => {
+  updatePhysicalParameters();
+});
+    
+    // Кнопка перестановки пирамиды
+    document.getElementById('rackBtn')?.addEventListener('click', () => {
+      initBalls();
+    });
+    
+    // Кнопка полного сброса
+    document.getElementById('fullResetBtn')?.addEventListener('click', () => {
+  initBalls();
+});
+    
+    // Кнопка переключения траектории
+    document.getElementById('toggleTraj')?.addEventListener('click', function() {
+      showTrajectory = !showTrajectory;
+      this.textContent = 📈 Траектория: ${showTrajectory ? 'Вкл' : 'Выкл'};
+    });
+    
+    // Кнопка сохранения симуляции
+   // В initUI() добавьте:
+document.getElementById('saveSimulationBtn')?.addEventListener('click', saveSimulationToServer);
+    // Фильтр по шарам
+    document.getElementById('ballFilter')?.addEventListener('change', function() {
+      const selectedBall = this.value;
+      
+      if (selectedBall === 'all') {
+        // Показать все столкновения
+        const allRows = document.querySelectorAll('#collisionsBody tr');
+        allRows.forEach(row => row.style.display = '');
+      } else {
+        // Показать только столкновения с выбранным шаром
+        const allRows = document.querySelectorAll('#collisionsBody tr');
+        allRows.forEach(row => {
+          const ball1 = row.cells[0]?.textContent;
+          const ball2 = row.cells[1]?.textContent;
+          
+          if (ball1 === selectedBall || ball2 === selectedBall) {
+            row.style.display = '';
+          } else {
+            row.style.display = 'none';
+          }
+        });
+      }
+    });
+  }
+
+  // Запуск
+  initUI();
+  gameLoop();
+});
